@@ -308,6 +308,156 @@ func (h *Handler) RegisterAlertsHandlers(s *server.MCPServer) {
 		}
 		return mcp.NewToolResultText(string(respJSON)), nil
 	})
+
+	// List all alert rules (not just firing alerts)
+	listAlertRulesTool := mcp.NewTool("signoz_list_alert_rules",
+		mcp.WithDescription("List all alert rules from SigNoz (not just firing alerts). Returns complete list of configured alert rules with their definitions, thresholds, and status."),
+		mcp.WithString("limit", mcp.Description("Maximum number of alert rules to return per page. Default: 50.")),
+		mcp.WithString("offset", mcp.Description("Number of results to skip before returning results. Default: 0.")),
+	)
+	s.AddTool(listAlertRulesTool, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		h.logger.Debug("Tool called: signoz_list_alert_rules")
+		limit, offset := paginate.ParseParams(req.Params.Arguments)
+
+		client := h.GetClient(ctx)
+		resp, err := client.ListAlertRules(ctx)
+		if err != nil {
+			h.logger.Error("Failed to list alert rules", zap.Error(err))
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+
+		var response map[string]any
+		if err := json.Unmarshal(resp, &response); err != nil {
+			h.logger.Error("Failed to parse alert rules response", zap.Error(err))
+			return mcp.NewToolResultError("failed to parse response: " + err.Error()), nil
+		}
+
+		rules, ok := response["data"].([]any)
+		if !ok {
+			// If data is not an array, return as-is
+			return mcp.NewToolResultText(string(resp)), nil
+		}
+
+		total := len(rules)
+		pagedRules := paginate.Array(rules, offset, limit)
+
+		resultJSON, err := paginate.Wrap(pagedRules, total, offset, limit)
+		if err != nil {
+			h.logger.Error("Failed to wrap alert rules with pagination", zap.Error(err))
+			return mcp.NewToolResultError("failed to marshal response: " + err.Error()), nil
+		}
+
+		return mcp.NewToolResultText(string(resultJSON)), nil
+	})
+
+	// Create alert rule
+	createAlertTool := mcp.NewTool("signoz_create_alert",
+		mcp.WithDescription("Create a new alert rule in SigNoz. The alertRule parameter should be a complete JSON object with the alert definition. Use signoz_get_alert to see the structure of an existing alert."),
+		mcp.WithString("alertRule", mcp.Required(), mcp.Description("Complete alert rule JSON object. Must include: alert (name), alertType, ruleType, condition, labels, etc.")),
+	)
+	s.AddTool(createAlertTool, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		alertRuleStr, ok := req.Params.Arguments.(map[string]any)["alertRule"].(string)
+		if !ok || alertRuleStr == "" {
+			h.logger.Warn("Invalid or empty alertRule parameter")
+			return mcp.NewToolResultError(`Parameter validation failed: "alertRule" must be a non-empty JSON string containing the alert definition.`), nil
+		}
+
+		// Validate JSON
+		var alertRule json.RawMessage
+		if err := json.Unmarshal([]byte(alertRuleStr), &alertRule); err != nil {
+			h.logger.Warn("Invalid JSON in alertRule parameter", zap.Error(err))
+			return mcp.NewToolResultError(fmt.Sprintf(`Parameter validation failed: "alertRule" is not valid JSON: %v`, err)), nil
+		}
+
+		h.logger.Debug("Tool called: signoz_create_alert")
+		client := h.GetClient(ctx)
+		resp, err := client.CreateAlert(ctx, alertRule)
+		if err != nil {
+			h.logger.Error("Failed to create alert", zap.Error(err))
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+
+		return mcp.NewToolResultText(string(resp)), nil
+	})
+
+	// Update alert rule
+	updateAlertTool := mcp.NewTool("signoz_update_alert",
+		mcp.WithDescription("Update an existing alert rule in SigNoz. The alertRule parameter should be a complete JSON object with the updated alert definition."),
+		mcp.WithString("ruleId", mcp.Required(), mcp.Description("The ID of the alert rule to update")),
+		mcp.WithString("alertRule", mcp.Required(), mcp.Description("Complete alert rule JSON object with updated values. Must include all fields from the original alert.")),
+	)
+	s.AddTool(updateAlertTool, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		args := req.Params.Arguments.(map[string]any)
+
+		ruleID, ok := args["ruleId"].(string)
+		if !ok || ruleID == "" {
+			h.logger.Warn("Invalid or empty ruleId parameter")
+			return mcp.NewToolResultError(`Parameter validation failed: "ruleId" must be a non-empty string.`), nil
+		}
+
+		alertRuleStr, ok := args["alertRule"].(string)
+		if !ok || alertRuleStr == "" {
+			h.logger.Warn("Invalid or empty alertRule parameter")
+			return mcp.NewToolResultError(`Parameter validation failed: "alertRule" must be a non-empty JSON string containing the alert definition.`), nil
+		}
+
+		// Validate JSON
+		var alertRule json.RawMessage
+		if err := json.Unmarshal([]byte(alertRuleStr), &alertRule); err != nil {
+			h.logger.Warn("Invalid JSON in alertRule parameter", zap.Error(err))
+			return mcp.NewToolResultError(fmt.Sprintf(`Parameter validation failed: "alertRule" is not valid JSON: %v`, err)), nil
+		}
+
+		h.logger.Debug("Tool called: signoz_update_alert", zap.String("ruleId", ruleID))
+		client := h.GetClient(ctx)
+		resp, err := client.UpdateAlert(ctx, ruleID, alertRule)
+		if err != nil {
+			h.logger.Error("Failed to update alert", zap.String("ruleId", ruleID), zap.Error(err))
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+
+		return mcp.NewToolResultText(string(resp)), nil
+	})
+
+	// Delete alert rule
+	deleteAlertTool := mcp.NewTool("signoz_delete_alert",
+		mcp.WithDescription("Delete an alert rule from SigNoz. Use with caution - this action cannot be undone."),
+		mcp.WithString("ruleId", mcp.Required(), mcp.Description("The ID of the alert rule to delete")),
+	)
+	s.AddTool(deleteAlertTool, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		ruleID, ok := req.Params.Arguments.(map[string]any)["ruleId"].(string)
+		if !ok || ruleID == "" {
+			h.logger.Warn("Invalid or empty ruleId parameter")
+			return mcp.NewToolResultError(`Parameter validation failed: "ruleId" must be a non-empty string.`), nil
+		}
+
+		h.logger.Debug("Tool called: signoz_delete_alert", zap.String("ruleId", ruleID))
+		client := h.GetClient(ctx)
+		err := client.DeleteAlert(ctx, ruleID)
+		if err != nil {
+			h.logger.Error("Failed to delete alert", zap.String("ruleId", ruleID), zap.Error(err))
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+
+		return mcp.NewToolResultText(fmt.Sprintf(`{"status": "success", "message": "Alert rule %s deleted successfully"}`, ruleID)), nil
+	})
+
+	// List notification channels
+	listChannelsTool := mcp.NewTool("signoz_list_notification_channels",
+		mcp.WithDescription("List all notification channels configured in SigNoz. Use this to find available channel names for configuring alerts."),
+	)
+	s.AddTool(listChannelsTool, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		h.logger.Debug("Tool called: signoz_list_notification_channels")
+
+		client := h.GetClient(ctx)
+		resp, err := client.ListNotificationChannels(ctx)
+		if err != nil {
+			h.logger.Error("Failed to list notification channels", zap.Error(err))
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+
+		return mcp.NewToolResultText(string(resp)), nil
+	})
 }
 
 func (h *Handler) RegisterDashboardHandlers(s *server.MCPServer) {

@@ -794,3 +794,207 @@ func (s *SigNoz) UpdateDashboard(ctx context.Context, id string, dashboard types
 
 	return nil
 }
+
+// CreateAlert creates a new alert rule in SigNoz
+func (s *SigNoz) CreateAlert(ctx context.Context, alertRule json.RawMessage) (json.RawMessage, error) {
+	url := fmt.Sprintf("%s/api/v1/rules", s.baseURL)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewBuffer(alertRule))
+	if err != nil {
+		return nil, fmt.Errorf("new request: %w", err)
+	}
+
+	req.Header.Set(SignozApiKey, s.apiKey)
+	req.Header.Set(ContentType, "application/json")
+
+	timeoutCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	s.logger.Debug("Creating alert rule in SigNoz")
+
+	client := &http.Client{Timeout: 30 * time.Second}
+
+	resp, err := client.Do(req.WithContext(timeoutCtx))
+	if err != nil {
+		s.logger.Error("HTTP request failed", zap.String("url", url), zap.Error(err))
+		return nil, fmt.Errorf("do request: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read response: %w", err)
+	}
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		s.logger.Error("API request failed", zap.String("url", url), zap.Int("status", resp.StatusCode), zap.String("response", string(body)))
+		return nil, fmt.Errorf("unexpected status %d: %s", resp.StatusCode, string(body))
+	}
+
+	s.logger.Debug("Successfully created alert rule", zap.Int("status", resp.StatusCode))
+	return body, nil
+}
+
+// UpdateAlert updates an existing alert rule in SigNoz
+func (s *SigNoz) UpdateAlert(ctx context.Context, ruleID string, alertRule json.RawMessage) (json.RawMessage, error) {
+	url := fmt.Sprintf("%s/api/v1/rules/%s", s.baseURL, ruleID)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, url, bytes.NewBuffer(alertRule))
+	if err != nil {
+		return nil, fmt.Errorf("new request: %w", err)
+	}
+
+	req.Header.Set(SignozApiKey, s.apiKey)
+	req.Header.Set(ContentType, "application/json")
+
+	timeoutCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	s.logger.Debug("Updating alert rule in SigNoz", zap.String("ruleID", ruleID))
+
+	client := &http.Client{Timeout: 30 * time.Second}
+
+	resp, err := client.Do(req.WithContext(timeoutCtx))
+	if err != nil {
+		s.logger.Error("HTTP request failed", zap.String("url", url), zap.String("ruleID", ruleID), zap.Error(err))
+		return nil, fmt.Errorf("do request: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read response: %w", err)
+	}
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		s.logger.Error("API request failed", zap.String("url", url), zap.Int("status", resp.StatusCode), zap.String("response", string(body)))
+		return nil, fmt.Errorf("unexpected status %d: %s", resp.StatusCode, string(body))
+	}
+
+	s.logger.Debug("Successfully updated alert rule", zap.String("ruleID", ruleID), zap.Int("status", resp.StatusCode))
+	return body, nil
+}
+
+// DeleteAlert deletes an alert rule in SigNoz
+func (s *SigNoz) DeleteAlert(ctx context.Context, ruleID string) error {
+	url := fmt.Sprintf("%s/api/v1/rules/%s", s.baseURL, ruleID)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, url, nil)
+	if err != nil {
+		return fmt.Errorf("new request: %w", err)
+	}
+
+	req.Header.Set(SignozApiKey, s.apiKey)
+	req.Header.Set(ContentType, "application/json")
+
+	timeoutCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	s.logger.Debug("Deleting alert rule in SigNoz", zap.String("ruleID", ruleID))
+
+	client := &http.Client{Timeout: 30 * time.Second}
+
+	resp, err := client.Do(req.WithContext(timeoutCtx))
+	if err != nil {
+		s.logger.Error("HTTP request failed", zap.String("url", url), zap.String("ruleID", ruleID), zap.Error(err))
+		return fmt.Errorf("do request: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(resp.Body)
+		s.logger.Error("API request failed", zap.String("url", url), zap.Int("status", resp.StatusCode), zap.String("response", string(body)))
+		return fmt.Errorf("unexpected status %d: %s", resp.StatusCode, string(body))
+	}
+
+	s.logger.Debug("Successfully deleted alert rule", zap.String("ruleID", ruleID), zap.Int("status", resp.StatusCode))
+	return nil
+}
+
+// ListAlertRules lists all alert rules (not just firing alerts)
+func (s *SigNoz) ListAlertRules(ctx context.Context) (json.RawMessage, error) {
+	url := fmt.Sprintf("%s/api/v1/rules", s.baseURL)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set(ContentType, "application/json")
+	req.Header.Set(SignozApiKey, s.apiKey)
+
+	ctx, cancel := context.WithTimeout(ctx, 600*time.Second)
+	defer cancel()
+	req = req.WithContext(ctx)
+
+	s.logger.Debug("Fetching all alert rules from SigNoz")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		s.logger.Error("HTTP request failed", zap.String("url", url), zap.Error(err))
+		return nil, fmt.Errorf("failed to do request: %w", err)
+	}
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			s.logger.Warn("Failed to close response body", zap.Error(err))
+		}
+	}()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		s.logger.Error("Failed to read response body", zap.String("url", url), zap.Error(err))
+		return nil, fmt.Errorf("failed to read response body: %w", err)
+	}
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		s.logger.Error("API request failed", zap.String("url", url), zap.Int("status", resp.StatusCode), zap.String("response", string(body)))
+		return nil, fmt.Errorf("unexpected status %d: %s", resp.StatusCode, string(body))
+	}
+
+	s.logger.Debug("Successfully retrieved alert rules", zap.Int("status", resp.StatusCode))
+	return body, nil
+}
+
+// ListNotificationChannels lists all notification channels from SigNoz
+func (s *SigNoz) ListNotificationChannels(ctx context.Context) (json.RawMessage, error) {
+	url := fmt.Sprintf("%s/api/v1/channels", s.baseURL)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set(ContentType, "application/json")
+	req.Header.Set(SignozApiKey, s.apiKey)
+
+	ctx, cancel := context.WithTimeout(ctx, 600*time.Second)
+	defer cancel()
+	req = req.WithContext(ctx)
+
+	s.logger.Debug("Fetching notification channels from SigNoz")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		s.logger.Error("HTTP request failed", zap.String("url", url), zap.Error(err))
+		return nil, fmt.Errorf("failed to do request: %w", err)
+	}
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			s.logger.Warn("Failed to close response body", zap.Error(err))
+		}
+	}()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		s.logger.Error("Failed to read response body", zap.String("url", url), zap.Error(err))
+		return nil, fmt.Errorf("failed to read response body: %w", err)
+	}
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		s.logger.Error("API request failed", zap.String("url", url), zap.Int("status", resp.StatusCode), zap.String("response", string(body)))
+		return nil, fmt.Errorf("unexpected status %d: %s", resp.StatusCode, string(body))
+	}
+
+	s.logger.Debug("Successfully retrieved notification channels", zap.Int("status", resp.StatusCode))
+	return body, nil
+}
