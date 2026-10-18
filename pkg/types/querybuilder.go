@@ -136,6 +136,26 @@ func (q *QueryPayload) Validate() error {
 	if q.RequestType != "" && q.RequestType != "raw" && q.RequestType != "trace" && q.RequestType != "time_series" && q.RequestType != "scalar" {
 		return fmt.Errorf("unsupported requestType %q", q.RequestType)
 	}
+	if q.RequestType == "" {
+		defaultSignal := ""
+		for _, query := range q.CompositeQuery.Queries {
+			if query.Type != "builder_query" {
+				continue
+			}
+			spec, ok := query.Spec.(QuerySpec)
+			if !ok {
+				return fmt.Errorf("invalid builder spec")
+			}
+			if defaultSignal != "" && defaultSignal != spec.Signal {
+				return fmt.Errorf("mixed signals require an explicit requestType")
+			}
+			defaultSignal = spec.Signal
+		}
+		q.RequestType = "raw"
+		if defaultSignal == "metrics" {
+			q.RequestType = "time_series"
+		}
+	}
 	for i, query := range q.CompositeQuery.Queries {
 		if query.Type == "clickhouse_sql" {
 			spec, ok := query.Spec.(ClickHouseSQLSpec)
@@ -150,12 +170,6 @@ func (q *QueryPayload) Validate() error {
 		spec, ok := query.Spec.(QuerySpec)
 		if !ok {
 			return fmt.Errorf("query at position %d: invalid builder spec", i+1)
-		}
-		if q.RequestType == "" {
-			q.RequestType = "raw"
-			if spec.Signal == "metrics" {
-				q.RequestType = "time_series"
-			}
 		}
 		switch spec.Signal {
 		case "metrics":
@@ -180,10 +194,6 @@ func (q *QueryPayload) Validate() error {
 		}
 		q.CompositeQuery.Queries[i].Spec = spec
 	}
-	if q.RequestType == "" {
-		q.RequestType = "raw"
-	}
-
 	return nil
 }
 

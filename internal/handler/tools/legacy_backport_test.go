@@ -165,20 +165,25 @@ func TestLegacyBackportQueryConsumer(t *testing.T) {
 		var calls atomic.Int32
 		s := legacyConsumer(t, func(w http.ResponseWriter, r *http.Request) { calls.Add(1); w.WriteHeader(http.StatusTeapot) })
 		for name, query := range map[string]string{
-			"SQL signal":        `{"start":1,"end":2,"compositeQuery":{"queries":[{"type":"clickhouse_sql","spec":{"name":"A","query":"SELECT 1","signal":"logs"}}]}}`,
-			"missing SQL":       `{"start":1,"end":2,"compositeQuery":{"queries":[{"type":"clickhouse_sql","spec":{"name":"A"}}]}}`,
-			"unknown envelope":  `{"start":1,"end":2,"compositeQuery":{"queries":[{"type":"promql","spec":{"name":"A","query":"up"}}]}}`,
-			"unknown signal":    `{"start":1,"end":2,"compositeQuery":{"queries":[{"type":"builder_query","spec":{"signal":"unknown"}}]}}`,
-			"unknown field":     `{"start":1,"end":2,"compositeQuery":{"queries":[{"type":"builder_query","spec":{"signal":"logs","unsupported":1}}]}}`,
-			"unknown mode":      `{"start":1,"end":2,"requestType":"unknown","compositeQuery":{"queries":[{"type":"builder_query","spec":{"signal":"logs"}}]}}`,
-			"incompatible mode": `{"start":1,"end":2,"requestType":"raw","compositeQuery":{"queries":[{"type":"builder_query","spec":{"signal":"metrics"}}]}}`,
-			"missing start":     `{"end":2,"compositeQuery":{"queries":[{"type":"clickhouse_sql","spec":{"name":"A","query":"SELECT 1"}}]}}`,
+			"mixed logs then metrics without mode": `{"start":1,"end":2,"compositeQuery":{"queries":[{"type":"builder_query","spec":{"signal":"logs"}},{"type":"builder_query","spec":{"signal":"metrics"}}]}}`,
+			"mixed metrics then logs without mode": `{"start":1,"end":2,"compositeQuery":{"queries":[{"type":"builder_query","spec":{"signal":"metrics"}},{"type":"builder_query","spec":{"signal":"logs"}}]}}`,
+			"SQL signal":                           `{"start":1,"end":2,"compositeQuery":{"queries":[{"type":"clickhouse_sql","spec":{"name":"A","query":"SELECT 1","signal":"logs"}}]}}`,
+			"missing SQL":                          `{"start":1,"end":2,"compositeQuery":{"queries":[{"type":"clickhouse_sql","spec":{"name":"A"}}]}}`,
+			"unknown envelope":                     `{"start":1,"end":2,"compositeQuery":{"queries":[{"type":"promql","spec":{"name":"A","query":"up"}}]}}`,
+			"unknown signal":                       `{"start":1,"end":2,"compositeQuery":{"queries":[{"type":"builder_query","spec":{"signal":"unknown"}}]}}`,
+			"unknown field":                        `{"start":1,"end":2,"compositeQuery":{"queries":[{"type":"builder_query","spec":{"signal":"logs","unsupported":1}}]}}`,
+			"unknown mode":                         `{"start":1,"end":2,"requestType":"unknown","compositeQuery":{"queries":[{"type":"builder_query","spec":{"signal":"logs"}}]}}`,
+			"incompatible mode":                    `{"start":1,"end":2,"requestType":"raw","compositeQuery":{"queries":[{"type":"builder_query","spec":{"signal":"metrics"}}]}}`,
+			"missing start":                        `{"end":2,"compositeQuery":{"queries":[{"type":"clickhouse_sql","spec":{"name":"A","query":"SELECT 1"}}]}}`,
 		} {
 			t.Run(name, func(t *testing.T) {
 				var q map[string]any
 				require.NoError(t, json.Unmarshal([]byte(query), &q))
 				result := legacyCall(t, s, "signoz_execute_builder_query", map[string]any{"query": q})
 				require.True(t, result.IsError)
+				if name == "mixed logs then metrics without mode" || name == "mixed metrics then logs without mode" {
+					require.Contains(t, legacyText(t, result), "mixed signals require an explicit requestType")
+				}
 			})
 		}
 		require.Zero(t, calls.Load(), "unsupported requests must not reach the backend")

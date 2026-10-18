@@ -14,7 +14,7 @@ acquiring builder-only fields. Builder `groupBy` survives serialization. Explici
 the signal, rather than rewritten according to query order. Unsupported query
 types, fields, signals and modes fail closed before HTTP. Omitted modes retain
 legacy single-signal defaults (metrics time series; logs/traces raw), with the
-existing 60-second default step for time-series queries. Mixed signals should
+existing 60-second default step for time-series queries. Mixed signals must
 specify a common compatible mode explicitly. This is not general PromQL/formula
 or arbitrary new backend-schema support.
 
