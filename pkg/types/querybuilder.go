@@ -1,6 +1,11 @@
 package types
 
-import "fmt"
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"strings"
+)
 
 // QueryPayload is struct used as payload the Query Builder v5 JSON schema
 type QueryPayload struct {
@@ -17,9 +22,56 @@ type CompositeQuery struct {
 	Queries []Query `json:"queries"`
 }
 
+// Each envelope has its own spec; SQL must never acquire builder fields.
 type Query struct {
-	Type string    `json:"type"`
-	Spec QuerySpec `json:"spec"`
+	Type string `json:"type"`
+	Spec any    `json:"spec"`
+}
+
+type ClickHouseSQLSpec struct {
+	Name     string `json:"name"`
+	Query    string `json:"query"`
+	Disabled bool   `json:"disabled,omitempty"`
+	Legend   string `json:"legend,omitempty"`
+}
+
+func (q *QueryPayload) UnmarshalJSON(data []byte) error {
+	type payload QueryPayload
+	return decodeQueryJSON(data, (*payload)(q))
+}
+
+func decodeQueryJSON(data []byte, target any) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	return decoder.Decode(target)
+}
+
+func (q *Query) UnmarshalJSON(data []byte) error {
+	var envelope struct {
+		Type string          `json:"type"`
+		Spec json.RawMessage `json:"spec"`
+	}
+	if err := decodeQueryJSON(data, &envelope); err != nil {
+		return err
+	}
+	q.Type = envelope.Type
+	switch q.Type {
+	case "builder_query":
+		var spec QuerySpec
+		if err := decodeQueryJSON(envelope.Spec, &spec); err != nil {
+			return fmt.Errorf("invalid builder_query spec: %w", err)
+		}
+		q.Spec = spec
+	case "clickhouse_sql":
+		var spec ClickHouseSQLSpec
+		if err := decodeQueryJSON(envelope.Spec, &spec); err != nil {
+			return fmt.Errorf("invalid clickhouse_sql spec: %w", err)
+		}
+		q.Spec = spec
+	default:
+		return fmt.Errorf("unsupported query type %q", q.Type)
+	}
+	return nil
 }
 
 type QuerySpec struct {
@@ -34,6 +86,7 @@ type QuerySpec struct {
 	Having       Having        `json:"having"`
 	SelectFields []SelectField `json:"selectFields"`
 	Aggregations []any         `json:"aggregations,omitempty"`
+	GroupBy      []SelectField `json:"groupBy,omitempty"`
 }
 
 type Order struct {
@@ -80,47 +133,53 @@ func (q *QueryPayload) Validate() error {
 		return fmt.Errorf("missing or empty compositeQuery.queries")
 	}
 
+	if q.RequestType != "" && q.RequestType != "raw" && q.RequestType != "trace" && q.RequestType != "time_series" && q.RequestType != "scalar" {
+		return fmt.Errorf("unsupported requestType %q", q.RequestType)
+	}
 	for i, query := range q.CompositeQuery.Queries {
-		if query.Type != "builder_query" {
+		if query.Type == "clickhouse_sql" {
+			spec, ok := query.Spec.(ClickHouseSQLSpec)
+			if !ok || strings.TrimSpace(spec.Name) == "" || strings.TrimSpace(spec.Query) == "" {
+				return fmt.Errorf("query at position %d: SQL requires name and query", i+1)
+			}
 			continue
 		}
-
-		spec := query.Spec
-		signal := spec.Signal
-		queryName := spec.Name
-		if queryName == "" {
-			queryName = fmt.Sprintf("query at position %d", i+1)
+		if query.Type != "builder_query" {
+			return fmt.Errorf("unsupported query type %q", query.Type)
 		}
-
-		switch signal {
-		case "metrics":
-			if q.RequestType != "time_series" {
+		spec, ok := query.Spec.(QuerySpec)
+		if !ok {
+			return fmt.Errorf("query at position %d: invalid builder spec", i+1)
+		}
+		if q.RequestType == "" {
+			q.RequestType = "raw"
+			if spec.Signal == "metrics" {
 				q.RequestType = "time_series"
 			}
-			if spec.StepInterval == nil || *spec.StepInterval <= 0 {
-				def := int64(60)
-				spec.StepInterval = &def
-			}
-
-		case "traces":
-			if q.RequestType != "raw" && q.RequestType != "trace" {
-				q.RequestType = "raw"
-			}
-			spec.StepInterval = nil
-
-		case "logs":
-			if q.RequestType != "raw" {
-				q.RequestType = "raw"
-			}
-			spec.StepInterval = nil
-
-		default:
-			return fmt.Errorf("%s: unknown signal type '%s'", queryName, signal)
 		}
-
+		switch spec.Signal {
+		case "metrics":
+			if q.RequestType != "time_series" && q.RequestType != "scalar" {
+				return fmt.Errorf("%s: metrics require time_series or scalar", spec.Name)
+			}
+		case "traces":
+		case "logs":
+			if q.RequestType == "trace" {
+				return fmt.Errorf("%s: logs do not support requestType trace", spec.Name)
+			}
+		default:
+			return fmt.Errorf("%s: unknown signal type %q", spec.Name, spec.Signal)
+		}
+		if q.RequestType == "time_series" {
+			if spec.StepInterval == nil || *spec.StepInterval <= 0 {
+				step := int64(60)
+				spec.StepInterval = &step
+			}
+		} else {
+			spec.StepInterval = nil
+		}
 		q.CompositeQuery.Queries[i].Spec = spec
 	}
-
 	if q.RequestType == "" {
 		q.RequestType = "raw"
 	}
