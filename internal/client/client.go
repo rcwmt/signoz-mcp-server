@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"time"
 
 	"go.uber.org/zap"
@@ -300,7 +301,7 @@ func (s *SigNoz) ListDashboards(ctx context.Context) (json.RawMessage, error) {
 }
 
 func (s *SigNoz) GetDashboard(ctx context.Context, uuid string) (json.RawMessage, error) {
-	url := fmt.Sprintf("%s/api/v1/dashboards/%s", s.baseURL, uuid)
+	url := fmt.Sprintf("%s/api/v2/dashboards/%s", s.baseURL, url.PathEscape(uuid))
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
