@@ -495,11 +495,14 @@ func (h *Handler) RegisterDashboardHandlers(s *server.MCPServer) {
 			display, _ := spec["display"].(map[string]any)
 			id, _ := dash["id"].(string)
 			name, _ := display["name"].(string)
+			if name == "" {
+				name, _ = dash["name"].(string)
+			}
 			if id == "" || name == "" {
 				return mcp.NewToolResultError("invalid v2 dashboard summary: missing id or display name"), nil
 			}
 			data = append(data, map[string]any{
-				"uuid": dash["id"], "name": display["name"], "description": display["description"],
+				"uuid": id, "name": name, "description": display["description"],
 				"tags": dash["tags"], "createdAt": dash["createdAt"], "updatedAt": dash["updatedAt"],
 				"createdBy": dash["createdBy"], "updatedBy": dash["updatedBy"],
 			})

@@ -104,7 +104,82 @@ func TestDashboardsV2Consumer(t *testing.T) {
 			require.True(t, legacyCall(t, s, "signoz_list_dashboards", map[string]any{}).IsError)
 		})
 	}
+	t.Run("mixed_legacy_page", func(t *testing.T) {
+		var calls atomic.Int32
+		s := consumer(t, func(w http.ResponseWriter, r *http.Request) {
+			calls.Add(1)
+			require.Equal(t, http.MethodGet, r.Method)
+			require.Equal(t, "/api/v2/dashboards", r.URL.Path)
+			_, _ = io.WriteString(w, `{"status":"success","data":{"dashboards":[{"id":"normal-id","name":"normal-slug","spec":{"display":{"name":"Normal dashboard"}}},{"id":"legacy-id","name":"legacy-slug","legacy":true,"spec":{"display":{"name":""}}}],"total":3}}`)
+		})
+		result := legacyCall(t, s, "signoz_list_dashboards", map[string]any{})
+		require.False(t, result.IsError, legacyText(t, result))
+		var page struct {
+			Data       []map[string]any `json:"data"`
+			Pagination struct {
+				Total      int  `json:"total"`
+				HasMore    bool `json:"hasMore"`
+				NextOffset int  `json:"nextOffset"`
+			} `json:"pagination"`
+		}
+		require.NoError(t, json.Unmarshal([]byte(legacyText(t, result)), &page))
+		require.Len(t, page.Data, 2)
+		require.Equal(t, "normal-id", page.Data[0]["uuid"])
+		require.Equal(t, "Normal dashboard", page.Data[0]["name"])
+		require.Equal(t, "legacy-id", page.Data[1]["uuid"])
+		require.Equal(t, "legacy-slug", page.Data[1]["name"])
+		require.Equal(t, 3, page.Pagination.Total)
+		require.True(t, page.Pagination.HasMore)
+		require.Equal(t, 2, page.Pagination.NextOffset)
+		require.Equal(t, int32(1), calls.Load())
+	})
 	const payload = `{"name":"offline-dashboard","schemaVersion":"v6","image":"/assets/Icons/eight-ball","tags":[{"key":"env","value":"test"}],"spec":{"display":{"name":"Offline dashboard","description":"Preserve full state"},"layouts":[],"panels":{"text":{"kind":"Panel","spec":{"plugin":{"kind":"TextPanel","spec":{"text":"unchanged"}},"queries":[{"kind":"raw","spec":{"plugin":{"kind":"signoz/CompositeQuery","spec":{"queries":[{"type":"clickhouse_sql","spec":{"name":"A","query":"SELECT 1","disabled":false,"legend":""}}]}}}}],"threshold":0}}},"variables":[],"links":null,"datasources":null}}`
+	t.Run("explicit_tags_for_full_write", func(t *testing.T) {
+		var calls atomic.Int32
+		s := consumer(t, func(w http.ResponseWriter, r *http.Request) {
+			n := calls.Add(1)
+			expected := http.MethodPost
+			if n == 2 {
+				expected = http.MethodPut
+			}
+			require.Equal(t, expected, r.Method)
+			require.Equal(t, "request-fixture-key", r.Header.Get("SIGNOZ-API-KEY"))
+			var body map[string]json.RawMessage
+			require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+			require.JSONEq(t, `[]`, string(body["tags"]), "an intentional empty array must remain an array")
+			_, _ = io.WriteString(w, `{"status":"success","data":{"id":"offline-only"}}`)
+		})
+		args := func(mode, tagCase string) map[string]any {
+			var dashboard map[string]any
+			require.NoError(t, json.Unmarshal([]byte(payload), &dashboard))
+			switch tagCase {
+			case "absent":
+				delete(dashboard, "tags")
+			case "null":
+				dashboard["tags"] = nil
+			case "empty":
+				dashboard["tags"] = []any{}
+			}
+			if mode == "update" {
+				return map[string]any{"uuid": "existing", "dashboard": dashboard}
+			}
+			return dashboard
+		}
+		for _, mode := range []string{"create", "update"} {
+			for _, tagCase := range []string{"absent", "null"} {
+				result := legacyCall(t, s, "signoz_"+mode+"_dashboard", args(mode, tagCase))
+				require.True(t, result.IsError)
+				require.Contains(t, legacyText(t, result), "tags must be an explicit array")
+			}
+		}
+		require.Zero(t, calls.Load(), "absent/null tags must not reach an HTTP write")
+		for _, mode := range []string{"create", "update"} {
+			result := legacyCall(t, s, "signoz_"+mode+"_dashboard", args(mode, "empty"))
+			require.False(t, result.IsError, legacyText(t, result))
+		}
+		require.Equal(t, int32(2), calls.Load(), "intentional empty tags must reach both v2 write paths")
+	})
+
 	for _, mode := range []string{"create", "update"} {
 		successStatus := http.StatusCreated
 		if mode == "update" {

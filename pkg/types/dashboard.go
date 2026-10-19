@@ -41,6 +41,9 @@ func (d *Dashboard) UnmarshalJSON(data []byte) error {
 }
 
 func (d Dashboard) Validate() error {
+	if d.Tags == nil {
+		return fmt.Errorf("dashboard tags must be an explicit array; use [] only to intentionally clear all tags")
+	}
 	if d.SchemaVersion != "v6" || d.Spec == nil {
 		return fmt.Errorf("dashboard requires schemaVersion v6 and a complete v2 spec; legacy title/widgets/layout inputs are unsupported")
 	}
