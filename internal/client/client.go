@@ -200,11 +200,9 @@ func (s *SigNoz) GetAlertByRuleID(ctx context.Context, ruleID string) (json.RawM
 	return body, nil
 }
 
-// ListDashboards filters data as it returns too much of data even the ui tags
-// so we filter and only return required information which might help to get
-// detailed info of a dashboard.
-func (s *SigNoz) ListDashboards(ctx context.Context) (json.RawMessage, error) {
-	url := fmt.Sprintf("%s/api/v1/dashboards", s.baseURL)
+// ListDashboards returns one server-side v2 page; the MCP handler adds its summary and pagination.
+func (s *SigNoz) ListDashboards(ctx context.Context, limit, offset int) (json.RawMessage, error) {
+	url := fmt.Sprintf("%s/api/v2/dashboards?limit=%d&offset=%d", s.baseURL, limit, offset)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -243,60 +241,6 @@ func (s *SigNoz) ListDashboards(ctx context.Context) (json.RawMessage, error) {
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
 
-	var rawResponse map[string]interface{}
-	if err := json.Unmarshal(body, &rawResponse); err != nil {
-		s.logger.Error("Failed to parse response", zap.String("url", url), zap.Error(err))
-		return nil, fmt.Errorf("failed to parse response: %w", err)
-	}
-
-	if data, ok := rawResponse["data"].([]interface{}); ok {
-		simplifiedDashboards := make([]map[string]interface{}, 0, len(data))
-
-		for _, dashboard := range data {
-			if dash, ok := dashboard.(map[string]interface{}); ok {
-				var (
-					dashData map[string]interface{}
-					name     any
-					desc     any
-					tags     any
-				)
-				if v, ok := dash["data"].(map[string]interface{}); ok {
-					dashData = v
-					name = dashData["title"]
-					desc = dashData["description"]
-					tags = dashData["tags"]
-				}
-
-				simplified := map[string]interface{}{
-					"uuid":        dash["id"],
-					"name":        name,
-					"description": desc,
-					"tags":        tags,
-					"createdAt":   dash["createdAt"],
-					"updatedAt":   dash["updatedAt"],
-					"createdBy":   dash["createdBy"],
-					"updatedBy":   dash["updatedBy"],
-				}
-				simplifiedDashboards = append(simplifiedDashboards, simplified)
-			}
-		}
-
-		simplifiedResponse := map[string]interface{}{
-			"status": rawResponse["status"],
-			"data":   simplifiedDashboards,
-		}
-
-		simplifiedJSON, err := json.Marshal(simplifiedResponse)
-		if err != nil {
-			s.logger.Error("Failed to marshal simplified response", zap.Error(err))
-			return nil, fmt.Errorf("failed to marshal simplified response: %w", err)
-		}
-
-		s.logger.Debug("Successfully retrieved and simplified dashboards", zap.Int("count", len(simplifiedDashboards)), zap.Int("status", resp.StatusCode))
-		return simplifiedJSON, nil
-	}
-
-	s.logger.Debug("Successfully retrieved dashboards", zap.Int("status", resp.StatusCode))
 	return body, nil
 }
 
@@ -722,7 +666,10 @@ func (s *SigNoz) GetTraceSpanHierarchy(ctx context.Context, traceID string, star
 }
 
 func (s *SigNoz) CreateDashboard(ctx context.Context, dashboard types.Dashboard) (json.RawMessage, error) {
-	url := fmt.Sprintf("%s/api/v1/dashboards", s.baseURL)
+	if err := dashboard.Validate(); err != nil {
+		return nil, err
+	}
+	url := fmt.Sprintf("%s/api/v2/dashboards", s.baseURL)
 
 	dashboardJSON, err := json.Marshal(dashboard)
 	if err != nil {
@@ -762,7 +709,13 @@ func (s *SigNoz) CreateDashboard(ctx context.Context, dashboard types.Dashboard)
 }
 
 func (s *SigNoz) UpdateDashboard(ctx context.Context, id string, dashboard types.Dashboard) error {
-	url := fmt.Sprintf("%s/api/v1/dashboards/%s", s.baseURL, id)
+	if id == "" {
+		return fmt.Errorf("dashboard uuid is required")
+	}
+	if err := dashboard.Validate(); err != nil {
+		return err
+	}
+	url := fmt.Sprintf("%s/api/v2/dashboards/%s", s.baseURL, url.PathEscape(id))
 
 	dashboardJSON, err := json.Marshal(dashboard)
 	if err != nil {

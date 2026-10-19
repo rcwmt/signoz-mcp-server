@@ -1,17 +1,65 @@
 package types
 
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"strings"
+)
+
 type UpdateDashboardInput struct {
 	UUID      string    `json:"uuid" jsonschema:"required" jsonschema_extras:"description=Dashboard UUID to update."`
 	Dashboard Dashboard `json:"dashboard" jsonschema:"required" jsonschema_extras:"description=Full dashboard configuration representing the complete post-update state."`
 }
 
+// Dashboard is the v2 write payload. Spec remains open so panel plugins, nulls and
+// explicit zero values survive a full update without a lossy legacy conversion.
 type Dashboard struct {
-	Title       string              `json:"title" jsonschema:"required" jsonschema_extras:"description=The display name of the dashboard."`
-	Description string              `json:"description,omitempty" jsonschema_extras:"description=A brief explanation of what the dashboard shows."`
-	Tags        []string            `json:"tags" jsonschema_extras:"description=Keywords for categorization e.g performance latency."`
-	Layout      []LayoutItem        `json:"layout" jsonschema:"required" jsonschema_extras:"description=Defines the grid positioning and size for each widget."`
-	Variables   map[string]Variable `json:"variables,omitempty" jsonschema_extras:"description=Key-value map of template variables available for queries."`
-	Widgets     []Widget            `json:"widgets" jsonschema:"required" jsonschema_extras:"description=The list of all graphical components displayed on the dashboard."`
+	Name          string         `json:"name" jsonschema:"required" jsonschema_extras:"description=Stable lowercase RFC1123 dashboard slug."`
+	SchemaVersion string         `json:"schemaVersion" jsonschema:"required,enum=v6"`
+	Image         string         `json:"image,omitempty" jsonschema_extras:"description=Optional supported SigNoz dashboard icon or logo path or image data URI."`
+	Tags          []DashboardTag `json:"tags" jsonschema:"required"`
+	Spec          map[string]any `json:"spec" jsonschema:"required" jsonschema_extras:"description=Complete Perses v6 dashboard spec including display and full layouts/panels/variables collections. Preserve every existing spec field on PUT; fields omitted by a full update can be lost."`
+}
+
+type DashboardTag struct {
+	Key   string `json:"key"`
+	Value string `json:"value"`
+}
+
+func (d *Dashboard) UnmarshalJSON(data []byte) error {
+	type plain Dashboard
+	var value plain
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&value); err != nil {
+		return fmt.Errorf("dashboard requires the v2 schemaVersion/name/tags/spec payload; legacy title/widgets/layout inputs are unsupported: %w", err)
+	}
+	*d = Dashboard(value)
+	return d.Validate()
+}
+
+func (d Dashboard) Validate() error {
+	if d.Tags == nil {
+		return fmt.Errorf("dashboard tags must be an explicit array; use [] only to intentionally clear all tags")
+	}
+	if d.SchemaVersion != "v6" || d.Spec == nil {
+		return fmt.Errorf("dashboard requires schemaVersion v6 and a complete v2 spec; legacy title/widgets/layout inputs are unsupported")
+	}
+	if strings.TrimSpace(d.Name) == "" {
+		return fmt.Errorf("dashboard name is required")
+	}
+	// PUT is a full replacement; reject partial or legacy shapes before any write.
+	if _, ok := d.Spec["panels"].(map[string]any); !ok {
+		return fmt.Errorf("complete dashboard spec.panels must be an object")
+	}
+	for _, field := range []string{"layouts", "variables"} {
+		if _, ok := d.Spec[field].([]any); !ok {
+			return fmt.Errorf("complete dashboard spec.%s must be an array", field)
+		}
+	}
+	return nil
 }
 
 type LayoutItem struct {

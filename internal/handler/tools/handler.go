@@ -474,31 +474,58 @@ func (h *Handler) RegisterDashboardHandlers(s *server.MCPServer) {
 		limit, offset := paginate.ParseParams(req.Params.Arguments)
 
 		client := h.GetClient(ctx)
-		result, err := client.ListDashboards(ctx)
+		result, err := client.ListDashboards(ctx, limit, offset)
 		if err != nil {
 			h.logger.Error("Failed to list dashboards", zap.Error(err))
 			return mcp.NewToolResultError(err.Error()), nil
 		}
 
-		var dashboards map[string]any
-		if err := json.Unmarshal(result, &dashboards); err != nil {
-			h.logger.Error("Failed to parse dashboards response", zap.Error(err))
-			return mcp.NewToolResultError("failed to parse response: " + err.Error()), nil
+		var response struct {
+			Data *struct {
+				Dashboards []map[string]any `json:"dashboards"`
+				Total      *int             `json:"total"`
+			} `json:"data"`
 		}
-
-		data, ok := dashboards["data"].([]any)
-		if !ok {
-			h.logger.Error("Invalid dashboards response format", zap.Any("data", dashboards["data"]))
-			return mcp.NewToolResultError("invalid response format: expected data array"), nil
+		if err := json.Unmarshal(result, &response); err != nil || response.Data == nil || response.Data.Dashboards == nil || response.Data.Total == nil || *response.Data.Total < 0 {
+			return mcp.NewToolResultError("invalid v2 dashboard response: expected data.dashboards array and total"), nil
 		}
-
-		total := len(data)
-		pagedData := paginate.Array(data, offset, limit)
-
-		resultJSON, err := paginate.Wrap(pagedData, total, offset, limit)
+		data := make([]any, 0, len(response.Data.Dashboards))
+		for _, dash := range response.Data.Dashboards {
+			spec, _ := dash["spec"].(map[string]any)
+			display, _ := spec["display"].(map[string]any)
+			id, _ := dash["id"].(string)
+			name, _ := display["name"].(string)
+			if name == "" {
+				name, _ = dash["name"].(string)
+			}
+			if id == "" || name == "" {
+				return mcp.NewToolResultError("invalid v2 dashboard summary: missing id or display name"), nil
+			}
+			data = append(data, map[string]any{
+				"uuid": id, "name": name, "description": display["description"],
+				"tags": dash["tags"], "createdAt": dash["createdAt"], "updatedAt": dash["updatedAt"],
+				"createdBy": dash["createdBy"], "updatedBy": dash["updatedBy"],
+			})
+		}
+		total := *response.Data.Total
+		if len(data) > 0 && (offset > total || len(data) > total-offset) {
+			return mcp.NewToolResultError("invalid v2 dashboard response: page exceeds total"), nil
+		}
+		if len(data) == 0 && offset < total {
+			return mcp.NewToolResultError("invalid v2 dashboard response: empty page before total"), nil
+		}
+		// Advance by the returned page size, since the API can cap the requested limit.
+		nextOffset := offset + len(data)
+		hasMore := nextOffset < total
+		if !hasMore {
+			nextOffset = -1
+		}
+		resultJSON, err := json.Marshal(paginate.Response{
+			Data:       data,
+			Pagination: paginate.Metadata{Total: total, Offset: offset, Limit: limit, HasMore: hasMore, NextOffset: nextOffset},
+		})
 		if err != nil {
-			h.logger.Error("Failed to wrap dashboards with pagination", zap.Error(err))
-			return mcp.NewToolResultError("failed to marshal response: " + err.Error()), nil
+			return mcp.NewToolResultError("failed to marshal dashboard page: " + err.Error()), nil
 		}
 
 		return mcp.NewToolResultText(string(resultJSON)), nil
@@ -532,21 +559,7 @@ func (h *Handler) RegisterDashboardHandlers(s *server.MCPServer) {
 
 	createDashboardTool := mcp.NewTool(
 		"signoz_create_dashboard",
-		mcp.WithDescription(
-			"Creates a new monitoring dashboard based on the provided title, layout, and widget configuration. "+
-				"CRITICAL: You MUST read these resources BEFORE generating any dashboard output:\n"+
-				"1. signoz://dashboard/instructions - REQUIRED: Dashboard structure and basics\n"+
-				"2. signoz://dashboard/widgets-instructions - REQUIRED: Widget configuration rules\n"+
-				"3. signoz://dashboard/widgets-examples - REQUIRED: Complete widget examples with all required fields\n\n"+
-				"QUERY-SPECIFIC RESOURCES (read based on query type used):\n"+
-				"- For PromQL queries: signoz://dashboard/promql-example\n"+
-				"- For Query Builder queries: signoz://dashboard/query-builder-example\n"+
-				"- For ClickHouse SQL on logs: signoz://dashboard/clickhouse-schema-for-logs + signoz://dashboard/clickhouse-logs-example\n"+
-				"- For ClickHouse SQL on metrics: signoz://dashboard/clickhouse-schema-for-metrics + signoz://dashboard/clickhouse-metrics-example\n"+
-				"- For ClickHouse SQL on traces: signoz://dashboard/clickhouse-schema-for-traces + signoz://dashboard/clickhouse-traces-example\n\n"+
-				"IMPORTANT: The widgets-examples resource contains complete, working widget configurations. "+
-				"You must consult it to ensure all required fields (id, panelTypes, title, query, selectedLogFields, selectedTracesFields, thresholds, contextLinks) are properly populated.",
-		),
+		mcp.WithDescription("Create a SigNoz v2 dashboard. Supply schemaVersion v6, a stable lowercase name, key/value tags, and a complete Perses spec with display/layouts/panels/variables. Legacy flat title/widgets/layout and the old v1 dashboard resources are not valid v2 payloads. See https://signoz.io/docs/dashboards/dashboards-v2-api/."),
 		mcp.WithInputSchema[types.Dashboard](),
 	)
 
@@ -573,7 +586,7 @@ func (h *Handler) RegisterDashboardHandlers(s *server.MCPServer) {
 			), nil
 		}
 
-		h.logger.Debug("Tool called: signoz_create_dashboard", zap.String("title", dashboardConfig.Title))
+		h.logger.Debug("Tool called: signoz_create_dashboard", zap.String("name", dashboardConfig.Name))
 		client := h.GetClient(ctx)
 		data, err := client.CreateDashboard(ctx, dashboardConfig)
 
@@ -587,23 +600,7 @@ func (h *Handler) RegisterDashboardHandlers(s *server.MCPServer) {
 
 	updateDashboardTool := mcp.NewTool(
 		"signoz_update_dashboard",
-		mcp.WithDescription(
-			"Update an existing dashboard by supplying its UUID along with a fully assembled dashboard JSON object.\n\n"+
-				"MANDATORY FIRST STEP: Read signoz://dashboard/widgets-examples before doing ANYTHING else. This is NON-NEGOTIABLE.\n\n"+
-				"The provided object must represent the complete post-update state, combining the current dashboard data and the intended modifications.\n\n"+
-				"REQUIRED RESOURCES (read ALL before generating output):\n"+
-				"1. signoz://dashboard/instructions\n"+
-				"2. signoz://dashboard/widgets-instructions\n"+
-				"3. signoz://dashboard/widgets-examples ← CRITICAL: Shows complete widget field structure\n\n"+
-				"CONDITIONAL RESOURCES (based on query type):\n"+
-				"• PromQL → signoz://dashboard/promql-example\n"+
-				"• Query Builder → signoz://dashboard/query-builder-example\n"+
-				"• ClickHouse Logs → signoz://dashboard/clickhouse-schema-for-logs + clickhouse-logs-example\n"+
-				"• ClickHouse Metrics → signoz://dashboard/clickhouse-schema-for-metrics + clickhouse-metrics-example\n"+
-				"• ClickHouse Traces → signoz://dashboard/clickhouse-schema-for-traces + clickhouse-traces-example\n\n"+
-				"WARNING: Failing to consult widgets-examples will result in incomplete widget configurations missing required fields "+
-				"(id, panelTypes, title, query, selectedLogFields, selectedTracesFields, thresholds, contextLinks).",
-		),
+		mcp.WithDescription("Replace a SigNoz v2 dashboard by its existing uuid. First fetch it with signoz_get_dashboard, then supply dashboard containing only its writable schemaVersion/name/tags/image/spec fields, preserving the COMPLETE spec and intended edits. PUT replaces the full dashboard; omitted fields can be lost. Retired flat title/widgets/layout and old v1 resource examples are unsupported. See https://signoz.io/docs/dashboards/dashboards-v2-api/."),
 		mcp.WithInputSchema[types.UpdateDashboardInput](),
 	)
 
@@ -635,7 +632,7 @@ func (h *Handler) RegisterDashboardHandlers(s *server.MCPServer) {
 			return mcp.NewToolResultError(`Parameter validation failed: "uuid" cannot be empty. Provide a valid dashboard UUID. Use list_dashboards tool to see available dashboards.`), nil
 		}
 
-		h.logger.Debug("Tool called: signoz_update_dashboard", zap.String("title", updateDashboardConfig.Dashboard.Title))
+		h.logger.Debug("Tool called: signoz_update_dashboard", zap.String("name", updateDashboardConfig.Dashboard.Name))
 		client := h.GetClient(ctx)
 		err = client.UpdateDashboard(ctx, updateDashboardConfig.UUID, updateDashboardConfig.Dashboard)
 
