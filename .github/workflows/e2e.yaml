@@ -2,19 +2,13 @@ name: e2e
 
 on:
   pull_request:
-    branches:
-      - main
-    types:
-      - opened
-      - synchronize
-      - reopened
-      - labeled
-  pull_request_target:
-    branches:
-      - main
-    types:
-      - labeled
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
   workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event.label.name || 'run-ci' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 defaults:
   run:
@@ -22,9 +16,10 @@ defaults:
 
 jobs:
   py-fmt:
-    if: |
-      (github.event_name == 'pull_request' && ! github.event.pull_request.head.repo.fork && github.event.pull_request.user.login != 'dependabot[bot]' && ! contains(github.event.pull_request.labels.*.name, 'safe-to-test')) ||
-      (github.event_name == 'pull_request_target' && contains(github.event.pull_request.labels.*.name, 'safe-to-test'))
+    if: >-
+      github.event_name != 'pull_request' ||
+      (contains(github.event.pull_request.labels.*.name, 'run-ci') &&
+       !github.event.pull_request.head.repo.fork && github.event.pull_request.user.login != 'dependabot[bot]')
     uses: signoz/primus.workflows/.github/workflows/py-fmt.yaml@main
     secrets: inherit
     with:
@@ -32,9 +27,10 @@ jobs:
       PYTHON_VERSION: "3.13"
       PY_SRC: tests
   py-lint:
-    if: |
-      (github.event_name == 'pull_request' && ! github.event.pull_request.head.repo.fork && github.event.pull_request.user.login != 'dependabot[bot]' && ! contains(github.event.pull_request.labels.*.name, 'safe-to-test')) ||
-      (github.event_name == 'pull_request_target' && contains(github.event.pull_request.labels.*.name, 'safe-to-test'))
+    if: >-
+      github.event_name != 'pull_request' ||
+      (contains(github.event.pull_request.labels.*.name, 'run-ci') &&
+       !github.event.pull_request.head.repo.fork && github.event.pull_request.user.login != 'dependabot[bot]')
     uses: signoz/primus.workflows/.github/workflows/py-lint.yaml@main
     secrets: inherit
     with:
@@ -42,14 +38,10 @@ jobs:
       PYTHON_VERSION: "3.13"
       PY_SRC: tests
   e2e:
-    # The suite casts an ephemeral SigNoz and needs no secrets to run, so it
-    # runs on every non-fork pull request. Fork PRs run only through the
-    # privileged pull_request_target path once a maintainer applies
-    # safe-to-test. The license key is optional: empty means community-only.
-    if: |
-      github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'pull_request' && ! github.event.pull_request.head.repo.fork && github.event.pull_request.user.login != 'dependabot[bot]' && ! contains(github.event.pull_request.labels.*.name, 'safe-to-test')) ||
-      (github.event_name == 'pull_request_target' && contains(github.event.pull_request.labels.*.name, 'safe-to-test'))
+    if: >-
+      github.event_name != 'pull_request' ||
+      (contains(github.event.pull_request.labels.*.name, 'run-ci') &&
+       !github.event.pull_request.head.repo.fork && github.event.pull_request.user.login != 'dependabot[bot]')
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:

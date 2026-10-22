@@ -2,14 +2,21 @@ name: guardrails
 
 on:
   pull_request:
-    branches:
-      - main
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event.label.name || 'run-ci' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
 
 jobs:
   contract:
+    if: >-
+      github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-ci')
     name: contract
     runs-on: ubuntu-latest
     steps:
