@@ -2,13 +2,13 @@ name: checks
 
 on:
   pull_request:
-    branches:
-      - main
-    types:
-      - opened
-      - synchronize
-      - reopened
-      - ready_for_review
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event.label.name }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -16,6 +16,9 @@ permissions:
 jobs:
   # The shared ci / fmt job rewrites files without diffing, so it cannot fail on drift.
   fmt:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' && github.event.action == 'labeled' && github.event.label.name == 'run-ci')
     name: fmt
     runs-on: ubuntu-latest
     steps:
@@ -35,6 +38,9 @@ jobs:
         run: make check-fmt
 
   repo-docs:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' && github.event.action == 'labeled' && github.event.label.name == 'run-ci')
     name: repo-docs
     runs-on: ubuntu-latest
     steps:
