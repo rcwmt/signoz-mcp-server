@@ -3,12 +3,12 @@ name: protocol
 on:
   pull_request:
     branches: [main]
-    types: [opened, synchronize, reopened, labeled]
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
   workflow_dispatch:
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event.label.name }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event.label.name || 'run-ci' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -16,8 +16,7 @@ permissions:
 jobs:
   inspector:
     if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'pull_request' && github.event.action == 'labeled' && github.event.label.name == 'run-ci')
+      github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-ci')
     name: inspector
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -43,8 +42,7 @@ jobs:
 
   conformance:
     if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'pull_request' && github.event.action == 'labeled' && github.event.label.name == 'run-ci')
+      github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-ci')
     name: conformance
     runs-on: ubuntu-latest
     timeout-minutes: 10

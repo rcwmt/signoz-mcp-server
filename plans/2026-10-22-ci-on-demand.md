@@ -6,11 +6,11 @@ PR: Published with this implementation
 
 ## Context
 
-Automatic PR suites compete with release builds. Root40862 assigns this fork's CI gates; Root40984 requires ordinary PR checks to remain present and skipped, with existing runner/job semantics preserved. Issues are disabled in this fork, so Root40985 assigns the shared tracking issue.
+Automatic PR suites compete with release builds. Root40862 assigns this fork's CI gates; Root40984 requires ordinary PR checks to remain present and skipped, with existing runner/job semantics preserved. Issues are disabled in this fork, so Root40985 assigns the shared tracking issue. Root41019 supersedes the initial label-event-only gate with persistent label admission.
 
 ## Approach
 
-Keep ordinary PR events and add labeled events plus manual dispatch. Heavy jobs run only on dispatch or a newly applied `run-ci` label. Existing fork/Dependabot restrictions remain on reusable CI and e2e jobs; the privileged `safe-to-test` trigger cannot bypass demand. Include the label in workflow/ref concurrency so unrelated labels cannot cancel requested work. Main-push, tag and release workflows are unchanged.
+Keep ordinary PR events and add labeled events plus manual dispatch. Heavy jobs run only on dispatch or a persistent `run-ci` label. Existing fork/Dependabot restrictions remain on reusable CI and e2e jobs; the privileged `safe-to-test` trigger cannot bypass demand. Include the event label (default `run-ci`) in workflow/ref concurrency so unrelated labels cannot cancel requested work; cancel only PR runs. Main-push, tag and release workflows are unchanged.
 
 ## Files to Modify
 
@@ -22,4 +22,4 @@ Installed actionlint passed on the five changed workflows. Static event-selectio
 
 ## Outcome
 
-Implementation complete for source review. Adding `run-ci` requests one run; subsequent pushes skip heavy jobs until the label is removed/reapplied or the workflow is dispatched. Existing upstream reusable jobs and runner declarations are retained, not migrated. No MCP tool, client contract, deployed service or agent-skills change.
+Implementation complete for source review. Adding `run-ci` admits CI; subsequent pushes rerun heavy jobs while the label remains. Removing it stops automatic heavy PR jobs. Existing upstream reusable jobs and runner declarations are retained, not migrated. No MCP tool, client contract, deployed service or agent-skills change.

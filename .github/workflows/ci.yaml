@@ -3,18 +3,18 @@ name: ci
 on:
   pull_request:
     branches: [main]
-    types: [opened, synchronize, reopened, labeled]
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
   workflow_dispatch:
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event.label.name }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event.label.name || 'run-ci' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   fmt:
     if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'pull_request' && github.event.action == 'labeled' && github.event.label.name == 'run-ci' &&
+      github.event_name != 'pull_request' ||
+      (contains(github.event.pull_request.labels.*.name, 'run-ci') &&
        !github.event.pull_request.head.repo.fork && github.event.pull_request.user.login != 'dependabot[bot]')
     uses: signoz/primus.workflows/.github/workflows/go-fmt.yaml@main
     secrets: inherit
@@ -23,8 +23,8 @@ jobs:
       GO_VERSION: 1.26
   lint:
     if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'pull_request' && github.event.action == 'labeled' && github.event.label.name == 'run-ci' &&
+      github.event_name != 'pull_request' ||
+      (contains(github.event.pull_request.labels.*.name, 'run-ci') &&
        !github.event.pull_request.head.repo.fork && github.event.pull_request.user.login != 'dependabot[bot]')
     uses: signoz/primus.workflows/.github/workflows/go-lint.yaml@main
     secrets: inherit
@@ -33,8 +33,8 @@ jobs:
       GO_VERSION: 1.26
   test:
     if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'pull_request' && github.event.action == 'labeled' && github.event.label.name == 'run-ci' &&
+      github.event_name != 'pull_request' ||
+      (contains(github.event.pull_request.labels.*.name, 'run-ci') &&
        !github.event.pull_request.head.repo.fork && github.event.pull_request.user.login != 'dependabot[bot]')
     uses: signoz/primus.workflows/.github/workflows/go-test.yaml@main
     secrets: inherit
@@ -44,8 +44,8 @@ jobs:
       GO_VERSION: 1.26
   deps:
     if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'pull_request' && github.event.action == 'labeled' && github.event.label.name == 'run-ci' &&
+      github.event_name != 'pull_request' ||
+      (contains(github.event.pull_request.labels.*.name, 'run-ci') &&
        !github.event.pull_request.head.repo.fork && github.event.pull_request.user.login != 'dependabot[bot]')
     uses: signoz/primus.workflows/.github/workflows/go-deps.yaml@main
     secrets: inherit
@@ -54,8 +54,8 @@ jobs:
       GO_VERSION: 1.26
   build:
     if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'pull_request' && github.event.action == 'labeled' && github.event.label.name == 'run-ci' &&
+      github.event_name != 'pull_request' ||
+      (contains(github.event.pull_request.labels.*.name, 'run-ci') &&
        !github.event.pull_request.head.repo.fork && github.event.pull_request.user.login != 'dependabot[bot]')
     uses: signoz/primus.workflows/.github/workflows/go-build.yaml@main
     secrets: inherit

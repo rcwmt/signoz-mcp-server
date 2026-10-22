@@ -3,12 +3,12 @@ name: e2e
 on:
   pull_request:
     branches: [main]
-    types: [opened, synchronize, reopened, labeled]
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
   workflow_dispatch:
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event.label.name }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event.label.name || 'run-ci' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 defaults:
   run:
@@ -17,8 +17,8 @@ defaults:
 jobs:
   py-fmt:
     if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'pull_request' && github.event.action == 'labeled' && github.event.label.name == 'run-ci' &&
+      github.event_name != 'pull_request' ||
+      (contains(github.event.pull_request.labels.*.name, 'run-ci') &&
        !github.event.pull_request.head.repo.fork && github.event.pull_request.user.login != 'dependabot[bot]')
     uses: signoz/primus.workflows/.github/workflows/py-fmt.yaml@main
     secrets: inherit
@@ -28,8 +28,8 @@ jobs:
       PY_SRC: tests
   py-lint:
     if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'pull_request' && github.event.action == 'labeled' && github.event.label.name == 'run-ci' &&
+      github.event_name != 'pull_request' ||
+      (contains(github.event.pull_request.labels.*.name, 'run-ci') &&
        !github.event.pull_request.head.repo.fork && github.event.pull_request.user.login != 'dependabot[bot]')
     uses: signoz/primus.workflows/.github/workflows/py-lint.yaml@main
     secrets: inherit
@@ -39,8 +39,8 @@ jobs:
       PY_SRC: tests
   e2e:
     if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'pull_request' && github.event.action == 'labeled' && github.event.label.name == 'run-ci' &&
+      github.event_name != 'pull_request' ||
+      (contains(github.event.pull_request.labels.*.name, 'run-ci') &&
        !github.event.pull_request.head.repo.fork && github.event.pull_request.user.login != 'dependabot[bot]')
     runs-on: ubuntu-latest
     timeout-minutes: 45

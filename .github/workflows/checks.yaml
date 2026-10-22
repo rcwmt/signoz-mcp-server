@@ -7,8 +7,8 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event.label.name }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event.label.name || 'run-ci' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -17,8 +17,7 @@ jobs:
   # The shared ci / fmt job rewrites files without diffing, so it cannot fail on drift.
   fmt:
     if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'pull_request' && github.event.action == 'labeled' && github.event.label.name == 'run-ci')
+      github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-ci')
     name: fmt
     runs-on: ubuntu-latest
     steps:
@@ -39,8 +38,7 @@ jobs:
 
   repo-docs:
     if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'pull_request' && github.event.action == 'labeled' && github.event.label.name == 'run-ci')
+      github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-ci')
     name: repo-docs
     runs-on: ubuntu-latest
     steps:
