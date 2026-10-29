@@ -5,13 +5,49 @@ on:
       - v*
     branches:
       - main
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, labeled]
+  workflow_dispatch:
 
 permissions:
   contents: write
   id-token: write
 
 jobs:
+  validate:
+    name: Test and build container
+    if: >-
+      !startsWith(github.ref, 'refs/tags/') &&
+      (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-ci'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Verify dependencies and test
+        run: |
+          go mod verify
+          go test -race -count=1 ./...
+      - name: Build container binary
+        run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o target/linux-amd64/signoz-mcp-server ./cmd/server
+      - name: Build container with immutable base
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker pull gcr.io/distroless/base:latest
+          base_ref=$(docker image inspect gcr.io/distroless/base:latest --format '{{index .RepoDigests 0}}')
+          base_digest=${base_ref##*@sha256:}
+          [[ "$base_digest" =~ ^[a-f0-9]{64}$ ]]
+          docker build --file Dockerfile.multi-arch --build-arg ARCH=amd64 --build-arg DISTROLESS_SHA="$base_digest" --tag signoz-mcp-server:ci .
+
   build:
+    # Publishing requires upstream credentials; main validates the image without publishing.
+    if: startsWith(github.ref, 'refs/tags/v')
     uses: signoz/primus.workflows/.github/workflows/go-build.yaml@main
     secrets: inherit
     with:
